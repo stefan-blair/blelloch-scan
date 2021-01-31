@@ -86,9 +86,9 @@ pub fn chunk_ranges(len: usize, num_chunks: usize) -> Vec<usize> {
  * Potential optimizations:
  * Make some threshold below which everything is done on a single thread (not worth parellel overhead)
  */
-pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanError> {
+pub fn blelloch_scan<T: Default + Send>(num_threads: usize, v: Vec<T>, func: fn(&T, &T) -> T) -> Result<Vec<T>, ScanError> {
     let mut pool = thread_pool::ThreadPool::new(num_threads);
-    let mut result_vec = split_vector::SplitVector::with_vec(v.clone());
+    let mut result_vec = split_vector::SplitVector::with_vec(v);
 
     /**
      * This function, given the current step size of the pyramid, total width and number of threads, returns
@@ -124,9 +124,9 @@ pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanE
     for step in steps.clone() {
         // split the vector into chunks based on the pyramid ranges for the current step
         let ranges = pyramid_ranges_for(step, result_vec.len(), num_threads);
-        let chunks = result_vec.chunk(ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i)).collect::<Vec<_>>();
+        let chunks = result_vec.chunk(ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i, func)).collect::<Vec<_>>();
         // distribute the chunks and await results
-        pool.sendall(chunks, |_, (step, mut chunk): (usize, split_vector::SplitVectorChunk<u64>)| {
+        pool.sendall(chunks, |_, (step, mut chunk, func): (usize, split_vector::SplitVectorChunk<T>, fn(&T, &T) -> T)| {
             /*
              * Iterate through the chunks by step * 2, skipping every other element.  should look like
              * a  b  c  d  ...
@@ -136,19 +136,24 @@ pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanE
              * This is what spaces out the pyramids
              */
             for i in (0..chunk.len()).step_by(step * 2) {
-                if i + step < chunk.len() {
+                let pair = if i + step < chunk.len() {
                     /* 
                      * The current position [i] is the peak of the last sub pyramid.  step is the width of the current
                      * sub pyramid.  [i + step] is the position of the peak of the current sub pyramid, AND the second 
                      * sub pyramid beneath this one.  Add the two to get the peak for the current pyramid.
                      */
-                    chunk[i + step] += chunk[i];
+                    i + step
                 } else if i < chunk.len() - 1 {
                     /*
                      * If theres less than step amount of extra at the end, round down to the end.
                      */
-                    *chunk.last_mut().unwrap() += chunk[i];
-                }
+                    chunk.len() - 1
+                } else {
+                    continue
+                };
+
+                let result = func(&chunk[i], &chunk[pair]);
+                chunk[pair] = result;
             }
         }).gather().map_err(|_| ScanError::FailedThreadInGather)?;
     }
@@ -158,7 +163,7 @@ pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanE
      * should therefore be 0
      */
     let len = result_vec.len();
-    result_vec.view_mut().ok_or(ScanError::BrokenThreadLocking)?[len - 1] = 0;
+    result_vec.view_mut().ok_or(ScanError::BrokenThreadLocking)?[len - 1] = T::default();
 
     /*
      * Iterate back down the pyramid, and fix each pyramid's peak to be the sum of all previous elements.  Do this by taking the left 
@@ -167,8 +172,8 @@ pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanE
      */
     for step in steps.clone().rev() {
         let ranges = pyramid_ranges_for(step, result_vec.len(), num_threads);
-        let chunks = result_vec.chunk(ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i)).collect::<Vec<_>>();
-        pool.sendall(chunks, |_, (step, mut chunk): (usize, split_vector::SplitVectorChunk<u64>)| {
+        let chunks = result_vec.chunk(ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i, func)).collect::<Vec<_>>();
+        pool.sendall(chunks, |_, (step, mut chunk, func): (usize, split_vector::SplitVectorChunk<T>, fn(&T, &T) -> T)| {
             for i in (0..chunk.len()).step_by(step * 2) {
                 let pair = if i + step < chunk.len() {
                     i + step
@@ -180,7 +185,8 @@ pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanE
 
                 // Distribute the results back down the pyramid
                 let tmp = chunk[pair];
-                chunk[pair] += chunk[i];
+                let result = func(&chunk[i], &chunk[pair]);
+                chunk[pair] = result;
                 chunk[i] = tmp;               
             }
         }).gather().map_err(|_| ScanError::FailedThreadInGather)?;
