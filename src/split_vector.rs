@@ -1,53 +1,54 @@
 use std::sync::Arc;
 use std::slice;
 use std::ops;
+use std::default::Default;
 
 
-pub struct SplitVectorChunk<'a> {
-    main_memory: Arc<Vec<u64>>,
-    chunk: &'a mut [u64]
+pub struct SplitVectorChunk<'a, T> {
+    main_memory: Arc<Vec<T>>,
+    chunk: &'a mut [T]
 }
 
-impl<'a> SplitVectorChunk<'a> {
+impl<'a, T> SplitVectorChunk<'a, T> {
     pub fn len(&self) -> usize {
         self.chunk.len()
     }
 
-    pub fn last(&self) -> Option<&u64> {
+    pub fn last(&self) -> Option<&T> {
         self.chunk.last()
     }
 
-    pub fn last_mut(&mut self) -> Option<&mut u64> {
+    pub fn last_mut(&mut self) -> Option<&mut T> {
         self.chunk.last_mut()
     }
 }
 
-impl<'a> ops::Index<usize> for SplitVectorChunk<'a> {
-    type Output = u64;
+impl<'a, T> ops::Index<usize> for SplitVectorChunk<'a, T> {
+    type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.chunk[index]
     }
 } 
 
-impl<'a> ops::IndexMut<usize> for SplitVectorChunk<'a> {
+impl<'a, T> ops::IndexMut<usize> for SplitVectorChunk<'a, T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.chunk[index]
     }
 }
 
-pub struct SplitVector(Arc<Vec<u64>>);
+pub struct SplitVector<T>(Arc<Vec<T>>);
 
-impl SplitVector {
+impl<T: Default> SplitVector<T> {
     pub fn with_size(size: usize) -> Self {
-        Self(Arc::new(vec![0; size]))
+        Self(Arc::new((0..size).map(|_| T::default()).collect::<Vec<_>>()))
     }
 
-    pub fn with_vec(vec: Vec<u64>) -> Self {
+    pub fn with_vec(vec: Vec<T>) -> Self {
         Self(Arc::new(vec))
     }
 
-    pub fn chunk<'a, 'b>(&'a mut self, mut offsets: Vec<usize>) -> Option<Vec<SplitVectorChunk<'b>>> {
+    pub fn chunk<'a, 'b>(&'a mut self, mut offsets: Vec<usize>) -> Option<Vec<SplitVectorChunk<'b, T>>> {
         // ensure strictly ascending offsets within range
         if *offsets.last()? >= self.0.len() {
             return None
@@ -81,15 +82,15 @@ impl SplitVector {
      * Attempt to extract the inner vector, assuming no other references are held to it.  The vector
      * is returned and replaced with an empty vector.
      */
-    pub fn extract(&mut self) -> Option<Vec<u64>> {
+    pub fn extract(&mut self) -> Option<Vec<T>> {
         Some(std::mem::replace(Arc::get_mut(&mut self.0)?, Vec::new()))
     }
 
-    pub fn take_vec(self) -> Option<Vec<u64>> {
+    pub fn take_vec(self) -> Option<Vec<T>> {
         Arc::try_unwrap(self.0).ok()
     }
 
-    pub fn view_mut(&mut self) -> Option<&mut [u64]> {
+    pub fn view_mut(&mut self) -> Option<&mut [T]> {
         Arc::get_mut(&mut self.0).map(|x| &mut x[..])
     }
 

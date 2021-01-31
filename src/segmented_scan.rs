@@ -126,7 +126,7 @@ pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanE
         let ranges = pyramid_ranges_for(step, result_vec.len(), num_threads);
         let chunks = result_vec.chunk(ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i)).collect::<Vec<_>>();
         // distribute the chunks and await results
-        pool.sendall(chunks, |_, (step, mut chunk): (usize, split_vector::SplitVectorChunk)| {
+        pool.sendall(chunks, |_, (step, mut chunk): (usize, split_vector::SplitVectorChunk<u64>)| {
             /*
              * Iterate through the chunks by step * 2, skipping every other element.  should look like
              * a  b  c  d  ...
@@ -168,7 +168,7 @@ pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanE
     for step in steps.clone().rev() {
         let ranges = pyramid_ranges_for(step, result_vec.len(), num_threads);
         let chunks = result_vec.chunk(ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i)).collect::<Vec<_>>();
-        pool.sendall(chunks, |_, (step, mut chunk): (usize, split_vector::SplitVectorChunk)| {
+        pool.sendall(chunks, |_, (step, mut chunk): (usize, split_vector::SplitVectorChunk<u64>)| {
             for i in (0..chunk.len()).step_by(step * 2) {
                 let pair = if i + step < chunk.len() {
                     i + step
@@ -191,7 +191,7 @@ pub fn blelloch_scan(num_threads: usize, v: &Vec<u64>) -> Result<Vec<u64>, ScanE
 
 pub fn hillis_steel_scan(num_threads: usize, v: &Vec<Vec<u64>>) -> Option<Vec<Vec<u64>>> {
     // individual step function
-    let do_step = |(index, _), (data, _head_flags, mut chunk, ranges, step): (Arc<Vec<u64>>, _, split_vector::SplitVectorChunk, Arc<Vec<usize>>, _)| {
+    let do_step = |(index, _), (data, _head_flags, mut chunk, ranges, step): (Arc<Vec<u64>>, _, split_vector::SplitVectorChunk<u64>, Arc<Vec<usize>>, _)| {
         let start = ranges[index];
         // iterate over the current chunk
         for i in 0..chunk.len() {
@@ -253,7 +253,7 @@ pub fn hillis_steel_scan(num_threads: usize, v: &Vec<Vec<u64>>) -> Option<Vec<Ve
 }
 
 pub fn divide_and_conquer_scan(num_threads: usize, v: &Vec<Vec<u64>>) -> Option<Vec<Vec<u64>>> {
-    let first_sweep = |_, mut chunk: split_vector::SplitVectorChunk| -> u64 {
+    let first_sweep = |_, mut chunk: split_vector::SplitVectorChunk<u64>| -> u64 {
         let mut acc = 0;
         for i in 0..chunk.len() {
             acc += chunk[i];
@@ -262,7 +262,7 @@ pub fn divide_and_conquer_scan(num_threads: usize, v: &Vec<Vec<u64>>) -> Option<
         acc
     };
 
-    let second_sweep = |(index, _), (mut chunk, carries): (split_vector::SplitVectorChunk, Arc<Vec<u64>>)| {
+    let second_sweep = |(index, _), (mut chunk, carries): (split_vector::SplitVectorChunk<u64>, Arc<Vec<u64>>)| {
         if index > 0 {
             for i in 0..chunk.len() {
                 chunk[i] += carries[index - 1]
