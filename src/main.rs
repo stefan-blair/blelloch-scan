@@ -10,8 +10,8 @@ fn main() {
     for i in 128..256 {
         let vec = (1..i+1).collect::<Vec<_>>();
 
-        let blelloch = segmented_scan::blelloch_scan(NUM_THREADS, &vec).unwrap();
-        let sequential = segmented_scan::sequential_scan(&vec![vec]).unwrap();
+        let sequential = segmented_scan::sequential_scan(&vec![vec.clone()]).unwrap();
+        let blelloch = segmented_scan::blelloch_scan(NUM_THREADS, vec, |a, b| a + b).unwrap();
         assert_eq!(&blelloch[1..], sequential[0].split_last().unwrap().1);
     }
 

@@ -86,7 +86,7 @@ pub fn chunk_ranges(len: usize, num_chunks: usize) -> Vec<usize> {
  * Potential optimizations:
  * Make some threshold below which everything is done on a single thread (not worth parellel overhead)
  */
-pub fn blelloch_scan<T: Default + Send>(num_threads: usize, v: Vec<T>, func: fn(&T, &T) -> T) -> Result<Vec<T>, ScanError> {
+pub fn blelloch_scan<T: Default + Send + Sync + 'static>(num_threads: usize, v: Vec<T>, func: fn(&T, &T) -> T) -> Result<Vec<T>, ScanError> {
     let mut pool = thread_pool::ThreadPool::new(num_threads);
     let mut result_vec = split_vector::SplitVector::with_vec(v);
 
@@ -184,10 +184,8 @@ pub fn blelloch_scan<T: Default + Send>(num_threads: usize, v: Vec<T>, func: fn(
                 };
 
                 // Distribute the results back down the pyramid
-                let tmp = chunk[pair];
                 let result = func(&chunk[i], &chunk[pair]);
-                chunk[pair] = result;
-                chunk[i] = tmp;               
+                chunk[i] = std::mem::replace(&mut chunk[pair], result);
             }
         }).gather().map_err(|_| ScanError::FailedThreadInGather)?;
     }
