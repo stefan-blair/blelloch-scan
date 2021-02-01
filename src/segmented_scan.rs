@@ -86,7 +86,7 @@ pub fn chunk_ranges(len: usize, num_chunks: usize) -> Vec<usize> {
  * Potential optimizations:
  * Make some threshold below which everything is done on a single thread (not worth parellel overhead)
  */
-pub fn blelloch_scan<T: Default + Send + Sync + 'static>(num_threads: usize, v: Vec<T>, func: fn(&T, &T) -> T) -> Result<Vec<T>, ScanError> {
+pub fn blelloch_scan<T: Default + Send + Sync + 'static>(num_threads: usize, v: Vec<T>, func: fn(&T, &T) -> T, sequential_length: usize) -> Result<Vec<T>, ScanError> {
     let mut pool = thread_pool::ThreadPool::new(num_threads);
     let mut result_vec = split_vector::SplitVector::with_vec(v);
 
@@ -95,7 +95,7 @@ pub fn blelloch_scan<T: Default + Send + Sync + 'static>(num_threads: usize, v: 
      * which ranges the thread's chunks should be.  Used in both the up and down sweep loops for allocating
      * work to threads. 
      */
-    fn pyramid_ranges_for(step: usize, vec_len: usize, num_threads: usize) -> Vec<usize> {
+    fn pyramid_ranges_for(step: usize, vec_len: usize, num_threads: usize, sequential_length: usize) -> Vec<usize> {
         // total number of operands
         let num_operands = vec_len / step;
         // the total number of operations to perform this step
@@ -104,6 +104,15 @@ pub fn blelloch_scan<T: Default + Send + Sync + 'static>(num_threads: usize, v: 
         if num_operands % 2 == 1 && vec_len % (step * 2) > 0 {
             num_operations += 1;
         }
+
+        /*
+         * The sequential_length parameter specifies a point after which everything should be sequential, because the overhead of
+         * deploying to separate threads is not worth it anymore.
+         */
+        if num_operations < sequential_length {
+            return vec![step - 1];    
+        }
+
         let operation_ranges = if num_operations > num_threads {
             // because we care about distributing operations, chunk those first if theres more than one per thread
             chunk_ranges(num_operations, num_threads)
@@ -123,7 +132,7 @@ pub fn blelloch_scan<T: Default + Send + Sync + 'static>(num_threads: usize, v: 
      */
     for step in steps.clone() {
         // split the vector into chunks based on the pyramid ranges for the current step
-        let ranges = pyramid_ranges_for(step, result_vec.len(), num_threads);
+        let ranges = pyramid_ranges_for(step, result_vec.len(), num_threads, sequential_length);
         let chunks = result_vec.chunk(ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i, func)).collect::<Vec<_>>();
         // distribute the chunks and await results
         pool.sendall(chunks, |_, (step, mut chunk, func): (usize, split_vector::SplitVectorChunk<T>, fn(&T, &T) -> T)| {
@@ -171,7 +180,7 @@ pub fn blelloch_scan<T: Default + Send + Sync + 'static>(num_threads: usize, v: 
      * sub pyramid's peak to the sum of both.
      */
     for step in steps.clone().rev() {
-        let ranges = pyramid_ranges_for(step, result_vec.len(), num_threads);
+        let ranges = pyramid_ranges_for(step, result_vec.len(), num_threads, sequential_length);
         let chunks = result_vec.chunk(ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i, func)).collect::<Vec<_>>();
         pool.sendall(chunks, |_, (step, mut chunk, func): (usize, split_vector::SplitVectorChunk<T>, fn(&T, &T) -> T)| {
             for i in (0..chunk.len()).step_by(step * 2) {
