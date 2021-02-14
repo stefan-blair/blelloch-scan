@@ -1,35 +1,18 @@
 #![feature(test)]
-mod segmented_scan;
+mod prefix_scan;
 mod thread_pool;
 mod split_vector;
 
 const LARGE_COUNT: u64 = 128;
 const NUM_THREADS: usize = 4;
-fn main() {
-
-    for i in 128..256 {
-        let vec = (1..i+1).collect::<Vec<_>>();
-
-        let sequential = segmented_scan::sequential_scan(&vec![vec.clone()]).unwrap();
-        let blelloch = segmented_scan::blelloch_scan(NUM_THREADS, vec, |a, b| a + b, 0).unwrap();
-        assert_eq!(&blelloch[1..], sequential[0].split_last().unwrap().1);
-    }
-
-    // let segmented_list = vec![(0..LARGE_COUNT).collect::<Vec<_>>()];
-    // segmented_scan::divide_and_conquer_scan(NUM_THREADS, &segmented_list).unwrap();
-
-    // let segmented_list = vec![(0..LARGE_COUNT).collect::<Vec<_>>()];
-    // segmented_scan::sequential_scan(&segmented_list);
-}
+fn main() {}
 
 #[cfg(test)]
 mod tests {
     extern crate test;
 
-    use test::Bencher;
-
     use crate::thread_pool;
-    use crate::segmented_scan;
+    use crate::prefix_scan;
 
     const LARGE_COUNT: u64 = 10000000;
     const NUM_THREADS: usize = 4;
@@ -47,109 +30,37 @@ mod tests {
     }
 
     #[test]
-    fn large_hillis_steele_test() {
+    fn large_divide_conquer_test() {
         let count = 12;
-        let segmented_list = vec![(0..count).collect::<Vec<_>>()];
-        println!("segmented_list: {:?}", segmented_list);
-        assert_eq!(segmented_scan::sequential_scan(&segmented_list), segmented_scan::hillis_steel_scan(NUM_THREADS, &segmented_list))
+        let list = (0..count).collect::<Vec<_>>();
+        assert_eq!(prefix_scan::baseline::sequential_scan_no_simd(list.clone(), |a, b| a + b).unwrap(), prefix_scan::Scanner::new().with_threads(4).divide_and_conquer_scan(list).unwrap())
     }
 
     #[test]
-    fn large_divide_conquer_test() {
+    fn large_divide_conquer_test_2() {
         let count = 12;
-        let segmented_list = vec![(0..count).collect::<Vec<_>>()];
-        println!("segmented_list: {:?}", segmented_list);
-        assert_eq!(segmented_scan::sequential_scan(&segmented_list), segmented_scan::divide_and_conquer_scan(NUM_THREADS, &segmented_list))
+        let list = (0..count).collect::<Vec<_>>();
+        assert_eq!(prefix_scan::baseline::sequential_scan_no_simd(list.clone(), |a, b| a + b).unwrap(), prefix_scan::Scanner::new().with_threads(4).divide_and_conquer_scan_2(list).unwrap())
     }
 
-    #[ignore]
-    #[bench]
-    fn large_hillis_steele_scan(b: &mut Bencher) {
-        let segmented_list = vec![(0..LARGE_COUNT).collect::<Vec<_>>()];
-        b.iter(move|| {
-            segmented_scan::hillis_steel_scan(NUM_THREADS, &segmented_list)
-        })
+    #[test]
+    fn simd_sequential_test() {
+        let count = 32;
+        let mut list = (0..count).collect::<Vec<_>>();
+        let baseline = list.clone();
+        prefix_scan::baseline::sequential_scan_simd(&mut list[..]).unwrap();
+        assert_eq!(prefix_scan::baseline::sequential_scan_no_simd(baseline, |a, b| a + b).unwrap(), list)
     }
 
-    #[ignore]
-    #[bench]
-    fn large_divide_conquer_scan(b: &mut Bencher) {
-        let segmented_list = vec![(0..LARGE_COUNT).collect::<Vec<_>>()];
-        b.iter(move|| {
-            segmented_scan::divide_and_conquer_scan(NUM_THREADS, &segmented_list)
-        })
+    #[test]
+    fn quicksum_test() {
+        let vec = (0..35).collect::<Vec<_>>();
+        assert_eq!(prefix_scan::quicksum_simd(&vec), vec.iter().sum());
     }
 
-    #[bench]
-    fn blelloch_scan_0(b: &mut Bencher) {
-        let vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-        b.iter(|| {
-            assert!(segmented_scan::blelloch_scan(NUM_THREADS, vec.clone(), |a, b| a + b, 0).is_ok());
-        });
-    }
-    
-    #[bench]
-    fn blelloch_scan_1(b: &mut Bencher) {
-        let vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-        b.iter(|| {
-            assert!(segmented_scan::blelloch_scan(NUM_THREADS, vec.clone(), |a, b| a + b, 10).is_ok());
-        });
-    }
-    
-    #[bench]
-    fn blelloch_scan_2(b: &mut Bencher) {
-        let vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-            b.iter(|| {
-            assert!(segmented_scan::blelloch_scan(NUM_THREADS, vec.clone(), |a, b| a + b, 100).is_ok());
-        });
-    }
-    
-    #[bench]
-    fn blelloch_scan_3(b: &mut Bencher) {
-        let vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-            b.iter(|| {
-            assert!(segmented_scan::blelloch_scan(NUM_THREADS, vec.clone(), |a, b| a + b, 1000).is_ok());
-        });
-    }
-
-    // This clocks best
-    #[bench]
-    fn blelloch_scan_4(b: &mut Bencher) {
-        let vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-            b.iter(|| {
-            assert!(segmented_scan::blelloch_scan(NUM_THREADS, vec.clone(), |a, b| a + b, 10000).is_ok());
-        });
-    }
-
-    #[bench]
-    fn blelloch_scan_5(b: &mut Bencher) {
-        let vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-            b.iter(|| {
-            assert!(segmented_scan::blelloch_scan(NUM_THREADS, vec.clone(), |a, b| a + b, 100000).is_ok());
-        });
-    }
-
-    #[bench]
-    fn blelloch_scan_6(b: &mut Bencher) {
-        let vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-            b.iter(|| {
-            assert!(segmented_scan::blelloch_scan(NUM_THREADS, vec.clone(), |a, b| a + b, 1000000).is_ok());
-        });
-    }
-
-    #[bench]
-    fn blelloch_scan_7(b: &mut Bencher) {
-        let vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-            b.iter(|| {
-            assert!(segmented_scan::blelloch_scan(NUM_THREADS, vec.clone(), |a, b| a + b, 10000000).is_ok());
-        });
-    }
-
-    #[bench]
-    fn sequential_baseline(b: &mut Bencher) {
-        let vec = vec![(0..LARGE_COUNT).collect::<Vec<_>>()];
-        b.iter(move || {
-            assert!(segmented_scan::sequential_scan(&vec).is_some());
-        });
+    #[test]
+    fn parallel_quicksum_test() {
+        let vec = (0..35).collect::<Vec<_>>();
+        assert_eq!(prefix_scan::Scanner::new().with_threads(4).parallel_quicksum_simd(&vec), vec.iter().sum());        
     }
 }

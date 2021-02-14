@@ -21,21 +21,27 @@ impl<'a, T> SplitVectorChunk<'a, T> {
     pub fn last_mut(&mut self) -> Option<&mut T> {
         self.chunk.last_mut()
     }
+
+    pub fn raw_chunk_mut(&mut self)  -> &mut [T] {
+        self.chunk
+    }
 }
 
-impl<'a, T> ops::Index<usize> for SplitVectorChunk<'a, T> {
-    type Output = T;
+impl<'a, T, I> ops::Index<I> for SplitVectorChunk<'a, T> 
+where I: std::slice::SliceIndex<[T]> {
+    type Output = I::Output;
 
-    fn index(&self, index: usize) -> &Self::Output {
+    fn index(&self, index: I) -> &Self::Output {
         &self.chunk[index]
     }
 } 
 
-impl<'a, T> ops::IndexMut<usize> for SplitVectorChunk<'a, T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+impl<'a, T, I> ops::IndexMut<I> for SplitVectorChunk<'a, T> 
+where I: std::slice::SliceIndex<[T]> {
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
         &mut self.chunk[index]
     }
-}
+} 
 
 pub struct SplitVector<T>(Arc<Vec<T>>);
 
@@ -48,16 +54,22 @@ impl<T: Default> SplitVector<T> {
         Self(Arc::new(vec))
     }
 
-    pub fn chunk<'a, 'b>(&'a mut self, mut offsets: Vec<usize>) -> Option<Vec<SplitVectorChunk<'b, T>>> {
+    /**
+     * Given an array of offsets, splits its contained vector into chunks based on those offsets.
+     * For example, these offsets:
+     *      [ a, b, c, d ]
+     * Will lead to three chunks, [a..b], [b..c] and [c..d]
+     * The offsets must be strictly increasing and within the range of this vector.
+     */
+    pub fn chunk<'a, 'b>(&'a mut self, offsets: &[usize]) -> Option<Vec<SplitVectorChunk<'b, T>>> {
         // ensure strictly ascending offsets within range
-        if *offsets.last()? >= self.0.len() {
+        if *offsets.last()? > self.0.len() {
             return None
         }
 
         let vector_start = Arc::get_mut(&mut self.0)?.as_mut_ptr();
         let mut chunks = Vec::with_capacity(offsets.len() + 1);
 
-        offsets.push(self.0.len());
         for i in 0..(offsets.len() - 1) {
             if offsets[i] >= offsets[i + 1] {
                 return None
@@ -72,6 +84,18 @@ impl<T: Default> SplitVector<T> {
         }
 
         Some(chunks)
+    }
+
+    /**
+     * Similar to the chunk method, but always chunks the entire array.
+     * For example, consider this vector: [ a, b, c, d, e, f, g ]
+     * and this vector of offsets: [ 0, 4 ].
+     * Using chunk will return these chunks: [ a, b, c, d ]
+     * Using chunk_all will return these chunks: [ a, b, c, d ], [ e, f, g ]
+     */
+    pub fn chunk_all<'a, 'b>(&'a mut self, mut offsets: Vec<usize>) -> Option<Vec<SplitVectorChunk<'b, T>>> {
+        offsets.push(self.0.len());
+        self.chunk(&offsets[..])
     }
 
     pub fn len(&self) -> usize {
@@ -113,7 +137,7 @@ mod tests {
 
         println!("pre chunked ref count == {:?}", sv.ref_count());
         {
-            let mut chunks = sv.chunk(vec![0, 2, 4]).unwrap();
+            let mut chunks = sv.chunk(&vec![0, 2, 4, 5]).unwrap();
             println!("post chunked ref count == {:?}", sv.ref_count());
             for chunk in chunks.iter_mut() {
                 for i in 0..chunk.chunk.len() {
