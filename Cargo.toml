@@ -1,5 +1,5 @@
 [package]
-name = "segmented_scan"
+name = "prefix_scan"
 version = "0.1.0"
 authors = ["Stefan Blair <stblair@microsoft.com>"]
 edition = "2018"
@@ -13,6 +13,10 @@ packed_simd = { version = "0.3.4", package = "packed_simd_2" }
 
 [dev-dependencies]
 criterion = "0.3"
+
+[[bench]]
+name = "prefix_scan_benches"
+harness = false
 
 [[bench]]
 name = "simd_benches"

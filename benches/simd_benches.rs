@@ -14,7 +14,7 @@ fn sequential_simd_bench(c: &mut Criterion) {
 fn quicksum_simd_bench(c: &mut Criterion) {
     c.bench_function("quicksum simd", |b| {
         let mut vec = (0..LARGE_COUNT).collect::<Vec<_>>();
-        b.iter(move || prefix_scan::quicksum_simd(&mut vec))
+        b.iter(move || prefix_scan::helper_functions::quicksum_simd(&mut vec))
     });
 }
 

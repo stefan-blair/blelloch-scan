@@ -41,7 +41,7 @@ impl<S: 'static + Send, R> Callable for ThreadWork<S, R> {
 }
 
 pub struct RemoteThread {
-    handle: thread::JoinHandle<()>,
+    _handle: thread::JoinHandle<()>,
     send_channel: mpsc::Sender<Box<dyn Callable + Send>>,
 }
 
@@ -54,7 +54,7 @@ impl RemoteThread {
             }
         });
         
-        Self { handle, send_channel: tx }
+        Self { _handle: handle, send_channel: tx }
     }
 
     fn send<S: 'static + Send, R: 'static + Send>(&mut self, function: ThreadFunction<S, R>, msg: S, result_channel: ThreadSendResultChannel<R>, thread_id: ThreadId) {
@@ -160,5 +160,22 @@ impl Index<usize> for ThreadPool {
 impl IndexMut<usize> for ThreadPool {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.threads[index]
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::util::thread_pool;
+
+    #[test]
+    fn thread_pool_basic_test() {
+        let numbers = vec![1, 2, 3, 4];
+        let mut pool = thread_pool::ThreadPool::new(4);
+
+        let result: u64 = pool.broadcast(numbers, |(index, _), args: Vec<u64>| {
+            args[index] * args[index]
+        }).gather().unwrap().iter().sum();
+
+        assert_eq!(result, 1 + 4 + 9 + 16);
     }
 }

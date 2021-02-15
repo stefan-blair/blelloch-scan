@@ -1,5 +1,4 @@
-pub mod prefix_scan;
-mod split_vector;
-mod thread_pool;
+pub mod prefix_scans;
+pub mod util;
 
-pub use prefix_scan::*;
+pub use prefix_scans::*;

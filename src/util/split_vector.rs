@@ -5,7 +5,7 @@ use std::default::Default;
 
 
 pub struct SplitVectorChunk<'a, T> {
-    main_memory: Arc<Vec<T>>,
+    _main_memory: Arc<Vec<T>>,
     chunk: &'a mut [T]
 }
 
@@ -77,7 +77,7 @@ impl<T: Default> SplitVector<T> {
 
             unsafe {
                 chunks.push(SplitVectorChunk {
-                    main_memory: self.0.clone(),
+                    _main_memory: self.0.clone(),
                     chunk: slice::from_raw_parts_mut(vector_start.add(offsets[i]), offsets[i + 1] - offsets[i])
                 })
             }
@@ -125,7 +125,7 @@ impl<T: Default> SplitVector<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::split_vector;
+    use crate::util::split_vector;
 
     #[test]
     fn basic_test() {
