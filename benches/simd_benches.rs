@@ -2,6 +2,10 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use prefix_scan;
 
 
+/**
+ * Some benchmarks for various simd functions used as building blocks by the prefix scans for speedup.
+ */
+
 const LARGE_COUNT: u64 = 10000000;
 
 fn sequential_simd_bench(c: &mut Criterion) {
@@ -33,5 +37,11 @@ fn parallel_simd_quicksum_bench(c: &mut Criterion) {
     });
 }
 
-criterion_group!(simd_benches, sequential_simd_bench, quicksum_simd_bench, sequential_no_simd_bench, parallel_simd_quicksum_bench);
+criterion_group!(simd_benches, 
+    sequential_simd_bench, 
+    quicksum_simd_bench, 
+    sequential_no_simd_bench, 
+    parallel_simd_quicksum_bench
+);
+
 criterion_main!(simd_benches);

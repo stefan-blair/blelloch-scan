@@ -10,7 +10,16 @@ pub fn prefix_scan_no_simd(data: &mut [u64]) {
 
 /**
  * Performs an in-place prefix scan with addition, using simd operations.  This may not be the best implementation,
- * but it performs fairly well.
+ * but it performs fairly well.  Supposing simd can operate on a vector of 8 64-bit numbers at a time, and it wants
+ * to add these numbers:
+ *      a     b     c     d     e     f     g     h
+ *  +         a     b     c     d     e     f     g
+ *  =   a    a+b   b+c   c+d   d+e   e+f   f+g   g+h
+ *  +               a    a+b   b+c   c+d   d+e   e+f
+ *  =   a    a+b  a+..c a+..d  b+..e c+..f d+..g e+..h
+ *  +                          a     a+b   a+..c a+..d
+ *  =   a    a+b  a+..c a+..d  a+..e a+..f a+..g a+..h
+ * So in only three arithmetic operations, eight numbers can be added.  The whole array is chunked by 8 and added this way.
  */
 pub fn prefix_scan_simd(data: &mut [u64]) {
     let mask_1 = packed_simd::u64x8::new(0, !0, !0, !0, !0, !0, !0, !0);
@@ -46,6 +55,11 @@ pub fn prefix_scan_simd(data: &mut [u64]) {
     }
 }
 
+/**
+ * Quickly sums up the vector by chunks of 8, maintaining an accumulation vector.  Each next 8 int chunk is added to the 
+ * accumulation vector, which is then finally summed up, along with "stragglers", or end numbers that didn't fit cleanly
+ * into a chunk of 8.
+ */
 pub fn quicksum_simd(data: &[u64]) -> u64 {
     let simd_len = (data.len() / 8) * 8;
     let mut acc = packed_simd::u64x8::splat(0);
@@ -57,7 +71,11 @@ pub fn quicksum_simd(data: &[u64]) -> u64 {
     acc.wrapping_sum() + (&data[simd_len..data.len()]).iter().sum::<u64>()
 }
 
+/**
+ * Given a value and a dataset, add the value to each element of the dataset.
+ */
 pub fn add_to_all_simd(value: u64, data: &mut [u64]) {
+    // convert the value into a vector that can be added to the rest of the data chunks
     let value_vector = packed_simd::u64x8::splat(value);
     // round the length to the nearest 8
     let multiple_length = (data.len() / 8) * 8;
@@ -77,6 +95,7 @@ pub fn add_to_all_simd(value: u64, data: &mut [u64]) {
 /**
  * Returns chunks.  For example, dividing 100 into 4 chunks would yield
  * [0, 25, 50, 75, 100]
+ * Takes up less space than returning pairs.
  */
 pub fn chunk_ranges(len: usize, num_chunks: usize) -> Vec<usize> {
     let chunk_size = len / num_chunks;

@@ -19,5 +19,13 @@ name = "prefix_scan_benches"
 harness = false
 
 [[bench]]
+name = "prefix_scan_growth_benches"
+harness = false
+
+[[bench]]
 name = "simd_benches"
+harness = false
+
+[[bench]]
+name = "parameter_tuning_benches"
 harness = false

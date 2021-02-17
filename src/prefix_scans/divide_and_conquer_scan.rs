@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::prefix_scans::{Scanner, ScanError};
 use crate::prefix_scans::helper_functions;
 use crate::util::split_vector;
@@ -8,15 +6,30 @@ use crate::util::ranged_vector;
 
 impl Scanner {
     /**
-     * Optimizations:  Use SIMD for addition step   (experiment with it, shuffling)
-     * Instead of partitioning by thread, do a smaller partition that can fit in each thread's cache
+     * This algorithm divides the given dataset into `self.num_threads()` chunks.  Each chunk has its prefix sum
+     * independently calculated by its corresponding thread.  Then, the final elements (the total sum) of each of
+     * those chunks are prefix-summed, and act as the "carry" from that chunk to the next.
+     *              +------------+------------+------------+------------+
+     *              |  thread 0  |  thread 1  |  thread 2  |  thread 3  |
+     *              +------------+------------+------------+------------+
+     *                  C_0            C_1          C_2           C3
+     *                                 C_0       C_0 + C_1   C_0 + C_1 + C_2
+     * The first chunk is completed, and the last chunks need to have their carry-ins added to each element.
+     * So, those chunks are divided amongst the threads:
+     *              +------------+------------+------------+------------+
+     *              |  thread 0  |  thread 1  |  thread 2  |  thread 3  |
+     *              +------------+---------+--+------+-----+---+--------+
+     *                           | thrd 0  | thrd 1  | thrd 2  | thrd 3 |
+     *                           +---------+---------+---------+--------+
+     * The threads must be careful to add the right carries to the right portions of their chunk.
      */
-    pub fn divide_and_conquer_post_scatter_scan(&mut self, mut vec: Vec<u64>) -> Result<Vec<u64>, ScanError> {
-        // calculate chunks
+    pub fn divide_and_conquer_scan(&mut self, mut vec: Vec<u64>) -> Result<Vec<u64>, ScanError> {
+        // partition the vector into smaller, more cache friendly sized chunks, to operate on
         for cache_chunk_start in (0..vec.len()).step_by(self.cache_chunk_length) {
             // the length of the current cache chunk.  this is either just the size of a cache chunk, or the remaining less-than cache chunk number of elements
             let current_length = std::cmp::min(self.cache_chunk_length, vec.len() - cache_chunk_start);
 
+            // split up the current cache-chunk into smaller thread-chunks, for each thread to calculate the local prefix scan of independently
             let chunk_ranges = helper_functions::chunk_ranges(current_length, self.num_threads());
             let mut data = split_vector::SplitVector::with_vec(vec);
             let chunks = data.chunk(&chunk_ranges.clone().into_iter().map(|x| x + cache_chunk_start).collect::<Vec<_>>()[..]).unwrap();
@@ -33,6 +46,7 @@ impl Scanner {
             helper_functions::prefix_scan_no_simd(&mut totals[..]);
             carries.append(&mut totals);
 
+            // create a ranged vector for storing which carry should be used in which ranges
             let carries = ranged_vector::RangedVector::new(chunk_ranges, carries);
             
             // on the second sweep, the first chunk has already been calculated, and nothing is carried into it.  distribute the remaining
@@ -54,45 +68,7 @@ impl Scanner {
                 }
             }).gather().map_err(|_| ScanError::FailedThreadInGather)?;
 
-            vec = data.extract().ok_or(ScanError::BrokenThreadLocking)?;
-        }
-
-        return Ok(vec);
-   }
-
-    pub fn divide_and_conquer_pre_scatter_scan(&mut self, mut vec: Vec<u64>) -> Result<Vec<u64>, ScanError> {
-        // calculate chunks
-        for cache_chunk_start in (0..vec.len()).step_by(self.cache_chunk_length) {
-            // stores the length of the current cache chunk.  this is either just the size of a cache chunk, or the remaining less-than cache chunk number of elements
-            let current_length = std::cmp::min(self.cache_chunk_length, vec.len() - cache_chunk_start);
-
-            let ranges = helper_functions::chunk_ranges(current_length, self.num_threads());
-            let ranges = ranges.into_iter()
-                                .map(|x| x + cache_chunk_start)
-                                .collect::<Vec<_>>();
-
-            // receive and accumulate the final sum for each chunk ('carry') to get the real final sums for those ranges
-            let borrowed_vec = Arc::new(vec);
-            let mut totals = self.thread_pool
-                .broadcast((borrowed_vec.clone(), ranges.clone()), |(index, _), (vec, ranges)| helper_functions::quicksum_simd(&vec[ranges[index]..ranges[index + 1]]))
-                .gather().map_err(|_| ScanError::FailedThreadInGather)?;
-            vec = Arc::try_unwrap(borrowed_vec).unwrap();
-
-            totals.pop();
-            for i in 1..totals.len() {
-                totals[i] += totals[i - 1]
-            }
-
-            let mut carries = vec![0];
-            carries.append(&mut totals);
-
-            let mut data = split_vector::SplitVector::with_vec(vec);
-            let chunks = data.chunk(&ranges[..]).unwrap().into_iter().zip(carries.into_iter()).collect::<Vec<_>>();
-            self.thread_pool.sendall(chunks, |_, (mut chunk, carry)| {
-                chunk[0] += carry;
-                helper_functions::prefix_scan_simd(chunk.raw_chunk_mut())
-            }).gather().map_err(|_| ScanError::FailedThreadInGather)?;
-            
+            // extract the vector back out of the SplitVector.  fails if a thread failed to release its refcount
             vec = data.extract().ok_or(ScanError::BrokenThreadLocking)?;
         }
 
@@ -112,20 +88,7 @@ mod test {
         let baseline = prefix_scans::baseline::sequential_scan_no_simd(list.clone(), |a, b| a + b).unwrap();
         let dac = prefix_scans::Scanner::new()
             .with_threads(4)
-            .divide_and_conquer_post_scatter_scan(list)
-            .unwrap();
-        assert_eq!(baseline, dac);
-    }
-
-    #[test]
-    fn small_pre_scatter_test() {
-        let count = 12;
-        let list = (0..count).collect::<Vec<_>>();
-
-        let baseline = prefix_scans::baseline::sequential_scan_no_simd(list.clone(), |a, b| a + b).unwrap();
-        let dac = prefix_scans::Scanner::new()
-            .with_threads(4)
-            .divide_and_conquer_pre_scatter_scan(list)
+            .divide_and_conquer_scan(list)
             .unwrap();
         assert_eq!(baseline, dac);
     }

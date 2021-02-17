@@ -41,7 +41,7 @@ fn pyramid_ranges_for(step: usize, vec_len: usize, num_threads: usize, sequentia
 }
 
 impl Scanner {
-    pub fn blelloch_scan<T: Default + Send + Sync + 'static>(&mut self, v: Vec<T>, func: fn(&T, &T) -> T) -> Result<Vec<T>, ScanError> {
+    pub fn blelloch_scan_generic<T: Default + Send + Sync + 'static>(&mut self, v: Vec<T>, func: fn(&T, &T) -> T) -> Result<Vec<T>, ScanError> {
         let mut result_vec = split_vector::SplitVector::with_vec(v);
     
         // an iterator over the steps up the pyramid (1 2 4 8 ...)
@@ -121,6 +121,87 @@ impl Scanner {
     
         result_vec.extract().ok_or(ScanError::BrokenThreadLocking)
     }
+
+    pub fn blelloch_scan(&mut self, v: Vec<u64>) -> Result<Vec<u64>, ScanError> {
+        let mut result_vec = split_vector::SplitVector::with_vec(v);
+    
+        // an iterator over the steps up the pyramid (1 2 4 8 ...)
+        let steps = (0..((result_vec.len() as f64).log2().ceil() as usize)).map(|i| 1 << i);
+    
+        /*
+         * First, we build up the pyramid of sections for which we know the total scans
+         */
+        for step in steps.clone() {
+            // split the vector into chunks based on the pyramid ranges for the current step
+            let ranges = pyramid_ranges_for(step, result_vec.len(), self.num_threads(), self.sequential_length);
+            let chunks = result_vec.chunk(&ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i)).collect::<Vec<_>>();
+            // distribute the chunks and await results
+            self.thread_pool.sendall(chunks, |_, (step, mut chunk): (usize, split_vector::SplitVectorChunk<u64>)| {
+                /*
+                 * Iterate through the chunks by step * 2, skipping every other element.  should look like
+                 * a  b  c  d  ...
+                 * |  ^  |  ^
+                 * +--+  +--+
+                 * So a -> b, c -> d, instead of a -> b -> c -> d.
+                 * This is what spaces out the pyramids
+                 */
+                for i in (0..chunk.len()).step_by(step * 2) {
+                    let pair = if i + step < chunk.len() {
+                        /* 
+                         * The current position [i] is the peak of the last sub pyramid.  step is the width of the current
+                         * sub pyramid.  [i + step] is the position of the peak of the current sub pyramid, AND the second 
+                         * sub pyramid beneath this one.  Add the two to get the peak for the current pyramid.
+                         */
+                        i + step
+                    } else if i < chunk.len() - 1 {
+                        /*
+                         * If theres less than step amount of extra at the end, round down to the end.
+                         */
+                        chunk.len() - 1
+                    } else {
+                        continue
+                    };
+    
+                    let result = chunk[i] + chunk[pair];
+                    chunk[pair] = result;
+                }
+            }).gather().map_err(|_| ScanError::FailedThreadInGather)?;
+        }
+    
+        /*
+         * Next, convert the pyramid such that each section's peak has the sum of all elements that came before the section.  The topmost peak
+         * should therefore be 0
+         */
+        let len = result_vec.len();
+        result_vec.view_mut().ok_or(ScanError::BrokenThreadLocking)?[len - 1] = 0;
+    
+        /*
+         * Iterate back down the pyramid, and fix each pyramid's peak to be the sum of all previous elements.  Do this by taking the left 
+         * sub pyramid's peak, swapping with current peak (same elements came before left pyramid as current pyramid), and set right 
+         * sub pyramid's peak to the sum of both.
+         */
+        for step in steps.clone().rev() {
+            let ranges = pyramid_ranges_for(step, result_vec.len(), self.num_threads(), self.sequential_length);
+            let chunks = result_vec.chunk(&ranges).ok_or(ScanError::InvalidChunking)?.into_iter().map(|i| (step, i)).collect::<Vec<_>>();
+            self.thread_pool.sendall(chunks, |_, (step, mut chunk): (usize, split_vector::SplitVectorChunk<u64>)| {
+                for i in (0..chunk.len()).step_by(step * 2) {
+                    let pair = if i + step < chunk.len() {
+                        i + step
+                    } else if i < chunk.len() - 1 {
+                        chunk.len() - 1
+                    } else {
+                        continue;
+                    };
+    
+                    // Distribute the results back down the pyramid
+                    let result = chunk[i] + chunk[pair];
+                    chunk[i] = std::mem::replace(&mut chunk[pair], result);
+                }
+            }).gather().map_err(|_| ScanError::FailedThreadInGather)?;
+        }
+    
+        result_vec.extract().ok_or(ScanError::BrokenThreadLocking)
+    }
 }
 
 #[cfg(test)]
@@ -134,7 +215,7 @@ mod test {
         let baseline = prefix_scans::baseline::sequential_scan_no_simd(list.clone(), |a, b| a + b).unwrap();
         let blelloch = prefix_scans::Scanner::new()
             .with_threads(4)
-            .blelloch_scan(list, |a, b| a + b)
+            .blelloch_scan(list)
             .unwrap();
         assert_eq!(baseline.split_last().unwrap().1, &blelloch[1..]);
     }
@@ -146,7 +227,7 @@ mod test {
         let baseline = prefix_scans::baseline::sequential_scan_no_simd(list.clone(), |a, b| a + b).unwrap();
         let blelloch = prefix_scans::Scanner::new()
             .with_threads(4)
-            .blelloch_scan(list, |a, b| a + b)
+            .blelloch_scan(list)
             .unwrap();
         assert_eq!(baseline.split_last().unwrap().1, &blelloch[1..]);
     }
